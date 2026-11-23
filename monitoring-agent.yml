@@ -1,0 +1,154 @@
+# monitoring-agent.yml - install node_exporter so Prometheus can collect server metrics
+
+---
+# One play for the web servers
+- name: Install node_exporter
+  # Target group
+  hosts: web
+  # Needs sudo for users, files and services
+  become: true
+
+  vars:
+    # Which release to install; change both lines together when upgrading
+    node_exporter_version: "1.11.1"
+    # The official SHA256 checksum for that exact file, from prometheus.io/download
+    node_exporter_sha256: "9f5ea48e5bc7b656f8a91a32e7d7deb89f70f73dabd0d974418aca15f37d6810"
+    # The only address allowed to read the metrics: your Windows PC
+    monitoring_host: "192.168.1.23"
+
+  tasks:
+    # A dedicated account with no login, so the program runs with minimal rights
+    - name: Create node_exporter system user
+      # The user module manages accounts
+      ansible.builtin.user:
+        # Account name
+        name: node_exporter
+        # A system account (low user ID, meant for services, not people)
+        system: true
+        # No login shell, so nobody can log in as this user
+        shell: /sbin/nologin
+        # No home directory needed
+        create_home: false
+
+    # Download the release, and fail if the checksum doesn't match
+    - name: Download node_exporter
+      # get_url downloads a file from the internet
+      ansible.builtin.get_url:
+        # The release file on GitHub, built from the version variable
+        url: "https://github.com/prometheus/node_exporter/releases/download/v{{ node_exporter_version }}/node_exporter-{{ node_exporter_version }}.linux-amd64.tar.gz"
+        # Where to save it on srv01
+        dest: "/tmp/node_exporter-{{ node_exporter_version }}.tar.gz"
+        # Verify the file's fingerprint before accepting it
+        checksum: "sha256:{{ node_exporter_sha256 }}"
+        # Readable by its owner and others; it's only an archive
+        mode: "0644"
+
+    # Unpack the archive
+    - name: Extract node_exporter
+      # unarchive extracts tar and zip files
+      ansible.builtin.unarchive:
+        # The downloaded archive
+        src: "/tmp/node_exporter-{{ node_exporter_version }}.tar.gz"
+        # Extract into /tmp
+        dest: /tmp
+        # The archive is already on srv01, not on the control node
+        remote_src: true
+        # Skip this task if the extracted program already exists
+        creates: "/tmp/node_exporter-{{ node_exporter_version }}.linux-amd64/node_exporter"
+
+    # Put the program where locally installed software belongs
+    - name: Install node_exporter binary
+      # copy can also copy files that are already on the server
+      ansible.builtin.copy:
+        # The extracted program
+        src: "/tmp/node_exporter-{{ node_exporter_version }}.linux-amd64/node_exporter"
+        # Its permanent location
+        dest: /usr/local/bin/node_exporter
+        # The source is on srv01
+        remote_src: true
+        # Owned by root, so the service account can't modify its own program
+        owner: root
+        # Group root
+        group: root
+        # Everyone can run it, only root can change it
+        mode: "0755"
+      # Restart the service if the program changed, for example after an upgrade
+      notify: Restart node_exporter
+
+    # The systemd unit that runs node_exporter as a service
+    - name: Install node_exporter service unit
+      # copy with inline content
+      ansible.builtin.copy:
+        # Custom units live here
+        dest: /etc/systemd/system/node_exporter.service
+        # Standard unit file permissions
+        mode: "0644"
+        # Comments on their own lines, as systemd requires
+        content: |
+          # Managed by Ansible
+          [Unit]
+          # Name shown in systemctl status
+          Description=Prometheus node_exporter
+          # Start only once the network is up
+          After=network-online.target
+          # Ask systemd to wait for the network to be fully up
+          Wants=network-online.target
+
+          [Service]
+          # Run as the low-privilege account, not root
+          User=node_exporter
+          # Its group, created along with the user
+          Group=node_exporter
+          # The program to run
+          ExecStart=/usr/local/bin/node_exporter
+          # If it crashes, start it again
+          Restart=on-failure
+
+          [Install]
+          # Start it during normal boot
+          WantedBy=multi-user.target
+      # Re-read unit files, then restart the service
+      notify:
+        - Reload systemd
+        - Restart node_exporter
+
+    # The service must be running and start at boot
+    - name: Start and enable node_exporter
+      # The systemd module
+      ansible.builtin.systemd_service:
+        # Service name
+        name: node_exporter
+        # Running now
+        state: started
+        # Starts at every boot
+        enabled: true
+
+    # Allow port 9100 only from your PC, not the whole network
+    - name: Allow metrics port from the monitoring host only
+      # firewalld module from ansible.posix
+      ansible.posix.firewalld:
+        # A rich rule: allow TCP 9100, but only from one source address
+        rich_rule: 'rule family="ipv4" source address="{{ monitoring_host }}" port port="9100" protocol="tcp" accept'
+        # Survives reboot
+        permanent: true
+        # Applies right now
+        immediate: true
+        # The rule must be present
+        state: enabled
+
+  handlers:
+    # Re-read unit files after one changes
+    - name: Reload systemd
+      # The systemd module
+      ansible.builtin.systemd_service:
+        # Same as systemctl daemon-reload
+        daemon_reload: true
+
+    # Restart node_exporter to pick up a new program or unit file
+    - name: Restart node_exporter
+      # The systemd module
+      ansible.builtin.systemd_service:
+        # Service name
+        name: node_exporter
+        # Stop and start it
+        state: restarted

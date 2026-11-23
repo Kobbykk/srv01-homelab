@@ -7,3 +7,5 @@
 - import_playbook: webserver.yml
 # Then the nightly backups
 - import_playbook: backup.yml
+# Then the monitoring agent
+- import_playbook: monitoring-agent.yml
