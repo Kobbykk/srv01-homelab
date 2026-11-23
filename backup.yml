@@ -1,0 +1,110 @@
+# backup.yml - nightly website backup: script, systemd service and timer
+
+---
+# One play for the web servers
+- name: Configure website backups
+  # Target group
+  hosts: web
+  # Needs sudo to write system files
+  become: true
+
+  tasks:
+    # The backup script, with the exact content below
+    - name: Install backup script
+      # copy writes the file only if the content differs
+      ansible.builtin.copy:
+        # Where the script lives on srv01
+        dest: /usr/local/sbin/backup-site.sh
+        # Only root may read, write or run it
+        mode: "0700"
+        # The script itself; bash allows a comment at the end of each line
+        content: |
+          #!/bin/bash
+          # backup-site.sh - back up the website and key configs into a dated archive
+          # Managed by Ansible: edit backup.yml, not this file
+          set -euo pipefail                       # stop on any error, unset variable, or failure inside a pipe
+
+          DEST=/var/backups/srv01                 # folder where the archives are kept
+          STAMP=$(date +%F_%H%M%S)                # timestamp such as 2026-11-23_020000
+          ARCHIVE="$DEST/site-$STAMP.tar.gz"      # full path of this run's archive
+
+          mkdir -p "$DEST"                        # create the backup folder if it's missing
+          tar --selinux -czf "$ARCHIVE" -C / srv/www/site etc/httpd/conf.d/site.conf etc/ssh/sshd_config.d   # archive the files together with their SELinux labels
+
+          find "$DEST" -name 'site-*.tar.gz' -mtime +7 -delete   # delete archives older than 7 days
+
+          logger -t backup-site "Created $ARCHIVE"  # write a line to the system log
+          echo "Backup complete: $ARCHIVE"           # print the result when run by hand
+
+    # The service: what systemd runs
+    - name: Install backup service unit
+      # copy again, this time a systemd unit file
+      ansible.builtin.copy:
+        # systemd reads custom units from this folder
+        dest: /etc/systemd/system/backup-site.service
+        # Standard permissions for unit files
+        mode: "0644"
+        # systemd only allows comments on their own lines, never at the end of a setting
+        content: |
+          # Managed by Ansible
+          [Unit]
+          # A human-readable name shown in systemctl status
+          Description=Back up website and configs
+
+          [Service]
+          # oneshot: run once to completion, then stop (not a long-running service)
+          Type=oneshot
+          # The command to run
+          ExecStart=/usr/local/sbin/backup-site.sh
+      # systemd must re-read its unit files if this changed
+      notify: Reload systemd
+
+    # The timer: when systemd runs it
+    - name: Install backup timer unit
+      # Another unit file
+      ansible.builtin.copy:
+        # Timer units live in the same folder
+        dest: /etc/systemd/system/backup-site.timer
+        # Standard permissions
+        mode: "0644"
+        content: |
+          # Managed by Ansible
+          [Unit]
+          # Name shown in systemctl list-timers
+          Description=Daily website backup
+
+          [Timer]
+          # Every day at 2:00 AM
+          OnCalendar=*-*-* 02:00:00
+          # If the machine was off at 2:00, run at the next boot
+          Persistent=true
+
+          [Install]
+          # Hook the timer into the normal set of timers started at boot
+          WantedBy=timers.target
+      # Re-read unit files if this changed
+      notify: Reload systemd
+
+    # Apply any pending systemd reload now, before touching the timer
+    - name: Run pending handlers
+      # meta runs Ansible's own actions; flush_handlers runs notified handlers immediately
+      ansible.builtin.meta: flush_handlers
+
+    # The timer must be running and start at boot
+    - name: Enable and start backup timer
+      # The systemd module
+      ansible.builtin.systemd_service:
+        # The timer, not the service; the timer starts the service
+        name: backup-site.timer
+        # Active now
+        state: started
+        # Starts at every boot
+        enabled: true
+
+  handlers:
+    # Tell systemd to re-read unit files after they change
+    - name: Reload systemd
+      # The systemd module again
+      ansible.builtin.systemd_service:
+        # Same as running: systemctl daemon-reload
+        daemon_reload: true

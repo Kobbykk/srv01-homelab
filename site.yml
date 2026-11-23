@@ -1,0 +1,9 @@
+# site.yml - the whole server, in order; run this one file to build or fix srv01
+
+---
+# SSH access and hardening first, so remote access is always safe
+- import_playbook: ssh-hardening.yml
+# Then the firewall, SELinux, Apache and HTTPS
+- import_playbook: webserver.yml
+# Then the nightly backups
+- import_playbook: backup.yml
