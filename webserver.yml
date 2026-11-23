@@ -1,0 +1,193 @@
+# webserver.yml - firewall, SELinux, Apache and HTTPS for the web servers
+
+---
+# One play aimed at the "web" group
+- name: Configure web server
+  # Which inventory group to run against
+  hosts: web
+  # All tasks need sudo
+  become: true
+
+  # Variables: values defined once and reused below with {{ name }}
+  vars:
+    # Where the website files live
+    site_root: /srv/www/site
+    # The server's IP address, used in the certificate and redirect
+    server_ip: 192.168.1.237
+
+  tasks:
+    # Make sure all the software we need is installed
+    - name: Install packages
+      # dnf is the package manager on CentOS
+      ansible.builtin.dnf:
+        # The list of packages
+        name:
+          # The Apache web server
+          - httpd
+          # The HTTPS module for Apache
+          - mod_ssl
+          # The firewall service
+          - firewalld
+          # Provides the semanage SELinux tool
+          - policycoreutils-python-utils
+        # present means install if missing, leave alone if already there
+        state: present
+
+    # The firewall must be running and start at boot
+    - name: Start and enable firewalld
+      # Manages systemd services
+      ansible.builtin.service:
+        # The firewall service name
+        name: firewalld
+        # Running now
+        state: started
+        # Starts at every boot
+        enabled: true
+
+    # Allow only the services this server actually provides
+    - name: Open firewall for SSH, HTTP and HTTPS
+      # The firewalld module from the ansible.posix collection
+      ansible.posix.firewalld:
+        # Each service from the loop list below, one at a time
+        service: "{{ item }}"
+        # Save the rule so it survives a reboot
+        permanent: true
+        # Also apply it right now, without waiting for a reload
+        immediate: true
+        # enabled means the service is allowed through
+        state: enabled
+      # Repeat this task once for each item in the list
+      loop:
+        - ssh
+        - http
+        - https
+
+    # Close the web console port we don't use
+    - name: Close cockpit in the firewall
+      # Same firewalld module
+      ansible.posix.firewalld:
+        # The service to block
+        service: cockpit
+        # Survives reboot
+        permanent: true
+        # Applies immediately
+        immediate: true
+        # disabled means not allowed through
+        state: disabled
+
+    # Permanent SELinux rule: files in the site folder are web content
+    - name: SELinux label rule for the site folder
+      # The sefcontext module from community.general (does what semanage fcontext does)
+      community.general.sefcontext:
+        # The folder and everything inside it
+        target: "{{ site_root }}(/.*)?"
+        # The label the web server is allowed to read
+        setype: httpd_sys_content_t
+        # The rule must exist
+        state: present
+      # If the rule was just added, relabel the existing files
+      notify: Restore site labels
+
+    # The site folder must exist
+    - name: Create site folder
+      # The file module manages files and folders
+      ansible.builtin.file:
+        # The folder path from our variable
+        path: "{{ site_root }}"
+        # directory means create it as a folder
+        state: directory
+        # Standard permissions: owner full access, everyone else read and enter
+        mode: "0755"
+
+    # The home page must have this exact content
+    - name: Publish home page
+      # copy writes the file only if it differs
+      ansible.builtin.copy:
+        # Where the page goes
+        dest: "{{ site_root }}/index.html"
+        # The page content
+        content: |
+          <h1>Served from /srv/www/site</h1>
+        # Readable by everyone, which the web server needs
+        mode: "0644"
+      # Relabel if the file was created or changed
+      notify: Restore site labels
+
+    # Create a self-signed certificate, but only if one doesn't exist yet
+    - name: Generate self-signed certificate
+      # Runs a plain command
+      ansible.builtin.command:
+        # The same openssl command you ran by hand in Step 10
+        cmd: >-
+          openssl req -x509 -nodes -days 365 -newkey rsa:2048
+          -keyout /etc/pki/tls/private/srv01.key
+          -out /etc/pki/tls/certs/srv01.crt
+          -subj "/CN=srv01"
+          -addext "subjectAltName=IP:{{ server_ip }},DNS:srv01"
+        # If this file already exists, skip the command; this makes it idempotent
+        creates: /etc/pki/tls/certs/srv01.crt
+
+    # The private key must be readable by root only
+    - name: Lock down the private key
+      # file module, used here only to set permissions
+      ansible.builtin.file:
+        # The key file
+        path: /etc/pki/tls/private/srv01.key
+        # Owner read and write, nobody else
+        mode: "0600"
+
+    # Apache site config: redirect HTTP to HTTPS, serve the site over HTTPS
+    - name: Install Apache site config
+      # copy with inline content again
+      ansible.builtin.copy:
+        # Apache reads every .conf file in this folder
+        dest: /etc/httpd/conf.d/site.conf
+        # The same config as Step 10, with the IP taken from our variable
+        content: |
+          <VirtualHost *:80>
+              Redirect permanent / https://{{ server_ip }}/
+          </VirtualHost>
+
+          <VirtualHost *:443>
+              DocumentRoot {{ site_root }}
+              SSLEngine on
+              SSLCertificateFile /etc/pki/tls/certs/srv01.crt
+              SSLCertificateKeyFile /etc/pki/tls/private/srv01.key
+              <Directory {{ site_root }}>
+                  Require all granted
+              </Directory>
+          </VirtualHost>
+        # Standard config file permissions
+        mode: "0644"
+        # Test the full Apache config before saving; if it fails, the old file stays
+        validate: apachectl -t -f /etc/httpd/conf/httpd.conf
+      # Restart Apache if the config changed
+      notify: Restart httpd
+
+    # Apache must be running and start at boot
+    - name: Start and enable Apache
+      # Manages systemd services
+      ansible.builtin.service:
+        # The Apache service name
+        name: httpd
+        # Running now
+        state: started
+        # Starts at every boot
+        enabled: true
+
+  handlers:
+    # Re-apply SELinux labels to the site folder
+    - name: Restore site labels
+      # Runs restorecon, the same command you used in Step 9
+      ansible.builtin.command:
+        # -R: recursive, -v: list what changed
+        cmd: restorecon -Rv {{ site_root }}
+
+    # Restart Apache to load a changed config
+    - name: Restart httpd
+      # Manages systemd services
+      ansible.builtin.service:
+        # The Apache service name
+        name: httpd
+        # Stop and start it
+        state: restarted
