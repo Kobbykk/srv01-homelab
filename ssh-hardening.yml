@@ -1,0 +1,51 @@
+# ssh-hardening.yml - make sure SSH stays locked down on every web server
+
+# Three dashes mark the start of a YAML file
+---
+# A play: a set of tasks aimed at a group of servers
+- name: Enforce SSH hardening
+  # Which inventory group to run against
+  hosts: web
+  # Run the tasks with sudo, since they change system files
+  become: true
+
+  # The list of things that must be true on the server
+  tasks:
+    # Task 1: the hardening file must exist with exactly this content
+    - name: Install SSH hardening config
+      # The copy module writes a file and only changes it if it differs
+      ansible.builtin.copy:
+        # Where the file goes on srv01
+        dest: /etc/ssh/sshd_config.d/00-hardening.conf
+        # The exact text the file must contain (the | keeps the line breaks)
+        content: |
+          PasswordAuthentication no
+          PermitRootLogin no
+        # The file must be owned by root
+        owner: root
+        # Its group must be root
+        group: root
+        # Only root may read or write it
+        mode: "0600"
+      # If this task changed anything, trigger the handler below
+      notify: Reload sshd
+
+    # Task 2: a disabled copy like last week's must not be left lying around
+    - name: Remove any disabled copy of the hardening file
+      # The file module manages files and folders
+      ansible.builtin.file:
+        # The leftover name from when it was switched off
+        path: /etc/ssh/sshd_config.d/00-hardening.conf.off
+        # absent means delete it if it exists, do nothing if it doesn't
+        state: absent
+
+  # Handlers only run when a task notifies them, and only once at the end
+  handlers:
+    # Reloads SSH so it reads the new settings without dropping connections
+    - name: Reload sshd
+      # The service module controls systemd services
+      ansible.builtin.service:
+        # The SSH service name
+        name: sshd
+        # Reload re-reads the config while keeping existing sessions open
+        state: reloaded
