@@ -59,6 +59,26 @@ services:
     # Restart automatically
     restart: unless-stopped
 
+
+    # Receives alerts from Prometheus and sends them to Discord
+  alertmanager:
+    # The official image, pinned to a version
+    image: prom/alertmanager:v0.33.0
+    # Fixed container name
+    container_name: alertmanager
+    # Tell it where the config is
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+    # Local-only web page on port 9093
+    ports:
+      - "127.0.0.1:9093:9093"
+    # Our config folder, including the secrets subfolder, read-only
+    volumes:
+      - ./alertmanager:/etc/alertmanager:ro
+    # Restart automatically
+    restart: unless-stopped
+
+
 # Named volumes: storage managed by Docker that outlives the containers
 volumes:
   # Prometheus's metric database

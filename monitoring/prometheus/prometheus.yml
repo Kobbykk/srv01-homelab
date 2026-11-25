@@ -54,3 +54,12 @@ scrape_configs:
 rule_files:
   # The rules we just wrote
   - alerts.yml
+
+# Where Prometheus sends alerts once they fire
+alerting:
+  # A list of Alertmanager instances
+  alertmanagers:
+    # A fixed list of addresses
+    - static_configs:
+        # The Alertmanager service name and port on the Docker network
+        - targets: ["alertmanager:9093"]

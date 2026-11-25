@@ -1,0 +1,25 @@
+# alertmanager.yml - where alerts go and how they're grouped
+
+# The routing tree: rules for sending alerts to receivers
+route:
+  # Send everything to the receiver named "discord" unless a sub-route says otherwise
+  receiver: discord
+  # Alerts with the same name are bundled into one message
+  group_by: [alertname]
+  # Wait 30 seconds after the first alert so related ones can join the same message
+  group_wait: 30s
+  # If more alerts join an existing group, send an update at most every 5 minutes
+  group_interval: 5m
+  # If a problem is still going on, remind every 4 hours
+  repeat_interval: 4h
+
+# The destinations
+receivers:
+  # The name used by the route above
+  - name: discord
+    # Alertmanager has built-in Discord support
+    discord_configs:
+      # Read the webhook URL from a file, so the secret isn't in this config
+      - webhook_url_file: /etc/alertmanager/secrets/discord_webhook
+        # Also send a message when the problem is fixed
+        send_resolved: true
