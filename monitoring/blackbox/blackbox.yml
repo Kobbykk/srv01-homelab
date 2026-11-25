@@ -1,0 +1,16 @@
+# blackbox.yml - the kinds of checks Blackbox can run
+
+# Each module is one named test
+modules:
+  # Expect a successful (2xx) answer over HTTPS from a self-signed certificate
+  http_2xx_selfsigned:
+    # Test using HTTP
+    prober: http
+    # Give up after 5 seconds and count it as down
+    timeout: 5s
+    # HTTP-specific settings
+    http:
+      # TLS (HTTPS) settings
+      tls_config:
+        # Accept our self-signed certificate; don't do this for public sites
+        insecure_skip_verify: true

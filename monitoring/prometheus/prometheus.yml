@@ -1,0 +1,56 @@
+# prometheus.yml - what Prometheus collects, and how often
+
+# Settings that apply to every job
+global:
+  # Collect metrics every 15 seconds
+  scrape_interval: 15s
+
+# Each job is one kind of target to collect from
+scrape_configs:
+  # Job 1: Prometheus monitors itself
+  - job_name: prometheus
+    # A fixed list of targets
+    static_configs:
+      # Inside its own container, Prometheus listens on port 9090
+      - targets: ["localhost:9090"]
+
+  # Job 2: server metrics from node_exporter on srv01
+  - job_name: node
+    static_configs:
+      # srv01's address and the node_exporter port
+      - targets: ["192.168.1.237:9100"]
+        # Extra label so graphs show a friendly server name
+        labels:
+          # The label name and its value
+          server: srv01
+
+  # Job 3: check the website from the outside, the way a visitor would
+  - job_name: website
+    # Blackbox serves probe results on /probe instead of /metrics
+    metrics_path: /probe
+    # Extra settings sent with each request
+    params:
+      # Which test to run, defined in blackbox.yml
+      module: [http_2xx_selfsigned]
+    static_configs:
+      # The URL to test
+      - targets: ["https://192.168.1.237"]
+    # Relabeling rewrites the target before Prometheus contacts it
+    relabel_configs:
+      # Rule 1: copy the URL into the request as ?target=...
+      - source_labels: [__address__]
+        # The label that becomes the target= parameter
+        target_label: __param_target
+      # Rule 2: show the URL as the instance name in graphs
+      - source_labels: [__param_target]
+        # The label shown in dashboards
+        target_label: instance
+      # Rule 3: actually send the request to the Blackbox container
+      - target_label: __address__
+        # The Blackbox service name and port on the Docker network
+        replacement: blackbox:9115
+
+# Files containing alert rules, relative to this config file
+rule_files:
+  # The rules we just wrote
+  - alerts.yml

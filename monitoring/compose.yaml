@@ -1,0 +1,67 @@
+# compose.yaml - the monitoring stack: Prometheus, Blackbox and Grafana
+
+# The containers to run
+services:
+  # Collects and stores metrics
+  prometheus:
+    # The official image and version
+    image: prom/prometheus:v3.12.0
+    # A fixed, readable container name
+    container_name: prometheus
+    # Arguments passed to Prometheus when it starts
+    command:
+      # Where to find the config inside the container
+      - --config.file=/etc/prometheus/prometheus.yml
+      # Keep 15 days of data, then delete the oldest
+      - --storage.tsdb.retention.time=15d
+    # Make the web page reachable from your PC; 127.0.0.1 keeps it off the network
+    ports:
+      - "127.0.0.1:9090:9090"
+    # Folders shared between your PC and the container
+    volumes:
+      # Our config folder, mounted read-only (ro)
+      - ./prometheus:/etc/prometheus:ro
+      # A named volume so stored metrics survive restarts
+      - prometheus-data:/prometheus
+    # Start again automatically unless you stopped it on purpose
+    restart: unless-stopped
+
+  # Runs the website check
+  blackbox:
+    # The official image
+    image: prom/blackbox-exporter:latest
+    # Fixed container name
+    container_name: blackbox
+    # Tell it where the config is
+    command:
+      - --config.file=/etc/blackbox/blackbox.yml
+    # Local-only port, handy for testing probes by hand
+    ports:
+      - "127.0.0.1:9115:9115"
+    # Our blackbox config, read-only
+    volumes:
+      - ./blackbox:/etc/blackbox:ro
+    # Restart automatically
+    restart: unless-stopped
+
+  # Dashboards
+  grafana:
+    # The official image
+    image: grafana/grafana:latest
+    # Fixed container name
+    container_name: grafana
+    # Local-only web page on port 3000
+    ports:
+      - "127.0.0.1:3000:3000"
+    # Keep dashboards and settings across restarts
+    volumes:
+      - grafana-data:/var/lib/grafana
+    # Restart automatically
+    restart: unless-stopped
+
+# Named volumes: storage managed by Docker that outlives the containers
+volumes:
+  # Prometheus's metric database
+  prometheus-data:
+  # Grafana's settings and dashboards
+  grafana-data:

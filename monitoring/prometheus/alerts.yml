@@ -1,0 +1,61 @@
+# alerts.yml - conditions that mean something is wrong
+
+# Rules are organized into named groups
+groups:
+  # One group for the home lab
+  - name: homelab
+    # The list of alert rules
+    rules:
+      # Alert 1: Prometheus can't reach a target (server down, service stopped, or firewall blocking)
+      - alert: TargetDown
+        # up is 1 when the last scrape worked and 0 when it failed
+        expr: up == 0
+        # Must stay true for 1 minute before firing, so a brief blip doesn't alert
+        for: 1m
+        # Extra labels attached to the alert
+        labels:
+          # How serious it is
+          severity: critical
+        # Human-readable text shown with the alert
+        annotations:
+          # {{ $labels.instance }} is replaced with the target's address
+          summary: "{{ $labels.instance }} is unreachable"
+
+      # Alert 2: the website check fails
+      - alert: WebsiteDown
+        # probe_success is 1 when Blackbox got a good response and 0 when it didn't
+        expr: probe_success == 0
+        # Down for a full minute before firing
+        for: 1m
+        labels:
+          # Users are affected, so it's critical
+          severity: critical
+        annotations:
+          # Names the URL that failed
+          summary: "Website {{ $labels.instance }} is down"
+
+      # Alert 3: the root disk is nearly full
+      - alert: DiskSpaceLow
+        # Free space on / as a percentage of total size, below 15%
+        expr: node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"} * 100 < 15
+        # Disk fills slowly, so wait 5 minutes to confirm
+        for: 5m
+        labels:
+          # Not an outage yet, but needs attention soon
+          severity: warning
+        annotations:
+          # $value is the calculated percentage; printf rounds it to a whole number
+          summary: "Root disk on {{ $labels.server }} has {{ $value | printf \"%.0f\" }}% free"
+
+      # Alert 4: CPU is pegged
+      - alert: HighCPU
+        # rate() turns the CPU idle counter into per-second idle time; 100 minus idle% is busy%
+        expr: 100 - (avg by (server) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
+        # Busy for 5 minutes straight, so short spikes are ignored
+        for: 5m
+        labels:
+          # Worth knowing, not an emergency
+          severity: warning
+        annotations:
+          # Shows the CPU usage that triggered it
+          summary: "CPU on {{ $labels.server }} is {{ $value | printf \"%.0f\" }}% busy"
